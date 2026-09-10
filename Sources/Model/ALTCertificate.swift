@@ -247,7 +247,10 @@ public final class ALTCertificate: NSObject, Identifiable {
     // MARK: NSObject
 
     public override var description: String {
-        "<\(NSStringFromClass(Swift.type(of: self))): \(Unmanaged.passUnretained(self).toOpaque()), Name: \(name), SN: \(serialNumber), HasPrivateKey: \(privateKey != nil)>"
+        // `privateKey` est un `Data` non-optionnel : le comparer à nil renvoyait
+        // toujours true. On rapporte ce qui intéresse vraiment au débogage —
+        // est-ce que la clé est réellement là.
+        "<\(NSStringFromClass(Swift.type(of: self))): \(Unmanaged.passUnretained(self).toOpaque()), Name: \(name), SN: \(serialNumber), HasPrivateKey: \(!privateKey.isEmpty)>"
     }
 
     public override func isEqual(_ object: Any?) -> Bool {

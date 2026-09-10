@@ -211,8 +211,10 @@ private extension ALTApplication {
         return string
     }
 
+    // Membre d'une `private extension` : le `public` était sans effet. Retiré
+    // plutôt que d'ouvrir l'extension (cf. fetchAccount dans +Authentication).
     @objc
-    public func dumpMachOInfo() -> String {
+    func dumpMachOInfo() -> String {
         let executableURL = bundle.executableURL ?? fileURL.appendingPathComponent(fileURL.deletingPathExtension().lastPathComponent)
         guard let parser = try? MachOParser(url: executableURL) else {
             return "[AltSign] MachOParser failed to load \(executableURL.lastPathComponent)"

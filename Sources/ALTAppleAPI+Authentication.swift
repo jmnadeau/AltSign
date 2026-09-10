@@ -430,7 +430,10 @@ private extension ALTAppleAPI {
         requestCodeTask.resume()
     }
 
-    public func fetchAccount(
+    // Membre d'une `private extension` : le `public` était sans effet (Swift le
+    // gardait privé et le signalait). On le retire plutôt que d'ouvrir
+    // l'extension, pour ne pas élargir la surface publique de la lib.
+    func fetchAccount(
         session: ALTAppleAPISession,
         completionHandler: @escaping (Result<ALTAccount, Error>) -> Void
     ) {

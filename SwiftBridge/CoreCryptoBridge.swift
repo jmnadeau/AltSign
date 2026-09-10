@@ -259,8 +259,9 @@ public enum CoreCryptoBridge {
             let symmetricKey = SymmetricKey(data: key)
             let gcmNonce = try AES.GCM.Nonce(data: nonce)
 
-            // CryptoKit expects the ciphertext and tag concatenated
-            let combined = ciphertext + tag
+            // Cet initialiseur de SealedBox prend nonce/ciphertext/tag séparément :
+            // pas besoin de les concaténer (le commentaire et le `let combined`
+            // qui traînaient ici étaient morts).
             let sealedBox = try AES.GCM.SealedBox(
                 nonce: gcmNonce,
                 ciphertext: ciphertext,
