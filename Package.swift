@@ -111,13 +111,20 @@ let package = Package(
                 .define("NOCRYPT"),
                 .define("NOUNCRYPT"),
 
-                .unsafeFlags(["-w", "-fvisibility=hidden"])
+                // Pas d'`unsafeFlags` ici : SwiftPM les interdit dès qu'un
+                // paquet est consommé comme dépendance versionnée distante
+                // ("target 'NativeBridge' ... contains unsafe build flags"), ce
+                // qui rendait ce paquet inutilisable autrement qu'en chemin
+                // local. Les deux flags retirés étaient `-w` (masquait les
+                // warnings du C vendu : libplist, minizip-ng, ldid) et
+                // `-fvisibility=hidden`. Pour la visibilité, consommer le
+                // produit `AltSign-Static` plutôt que `-Dynamic` évite d'exporter
+                // ces symboles internes.
             ],
 
             cxxSettings: [
                 .headerSearchPath("NativeBridge/include"),
                 .headerSearchPath("Dependencies/corecrypto/include"),
-                .unsafeFlags(["-w", "-fvisibility=hidden"])
             ],
 
             linkerSettings: [
