@@ -40,6 +40,11 @@ let package = Package(
         .target(
             name: "NativeBridge",
             dependencies: [
+                // Dependencies/ldid/ldid.cpp fait `#include <openssl/err.h>` :
+                // sans cette dépendance SwiftPM ne passe pas le `-F` du
+                // xcframework OpenSSL à ce target C/C++ et la compilation
+                // échoue sur "'openssl/err.h' file not found".
+                "OpenSSL",
             ],
             path: ".",
             sources: [
