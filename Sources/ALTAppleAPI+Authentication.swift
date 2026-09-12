@@ -375,9 +375,16 @@ private extension ALTAppleAPI {
 
     /// Demande l'envoi du code par SMS, puis le vérifie.
     ///
-    /// Réécrit d'après l'implémentation de référence de SideStore
-    /// (apple-private-apis, icloud-auth/src/client.rs). L'ancienne version
-    /// différait sur quatre points, chacun suffisant à faire échouer l'appel :
+    /// ⚠️ NE FONCTIONNE PAS. Réécrit d'après SideStore/apple-private-apis
+    /// (`icloud-auth/src/client.rs`), mais ce code **datait de mai 2024** et
+    /// Apple a changé depuis : `PUT /auth/verify/phone/` répond 405, et
+    /// `GET /auth` 403. Ni cette version ni la précédente n'obtiennent de code.
+    ///
+    /// Le parcours « appareil de confiance » (`requestTrustedDeviceTwoFactorCode`)
+    /// est celui qu'emploie AltStore en production et reste la voie fiable ;
+    /// Apple le choisit dès que le compte possède un appareil de confiance.
+    ///
+    /// Écarts relevés par rapport à cette référence, conservés faute de mieux :
     ///
     ///   - méthode `POST` au lieu de `PUT` ;
     ///   - URL `/auth/verify/phone/put?mode=sms` au lieu de `/auth/verify/phone/` ;
