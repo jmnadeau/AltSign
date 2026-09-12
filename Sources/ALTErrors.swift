@@ -289,9 +289,35 @@ public enum ALTServerError: LocalizedError {
     case badServerResponse(reason: String, jsonPayload: String)
     case invalidResponseFormat(rawPayload: String)
     case missingKey(key: String, jsonPayload: String)
+    /// Apple a répondu par un code d'erreur HTTP.
+    ///
+    /// Sans ce cas, une panne passagère (503) ou une limitation de débit (429)
+    /// se présentait comme un `invalidResponseFormat` recrachant la page HTML
+    /// d'erreur — illisible, et impossible à distinguer par programme d'une
+    /// réponse réellement malformée, donc impossible à réessayer.
+    case httpError(statusCode: Int, isTransient: Bool)
+
+    /// Vrai pour les codes qui ont une chance d'aboutir au prochain essai :
+    /// erreurs serveur et limitation de débit.
+    public static func isTransientStatusCode(_ code: Int) -> Bool {
+        code == 429 || (500...599).contains(code)
+    }
 
     public var errorDescription: String? {
         switch self {
+        case .httpError(let statusCode, let isTransient):
+            let explanation: String
+            switch statusCode {
+            case 429: explanation = "Apple limite le débit des requêtes"
+            case 503: explanation = "service Apple temporairement indisponible"
+            case 500...599: explanation = "erreur interne chez Apple"
+            case 401, 403: explanation = "Apple a refusé la session"
+            default: explanation = "réponse HTTP inattendue"
+            }
+            return isTransient
+                ? "\(explanation) (HTTP \(statusCode)) — réessayable"
+                : "\(explanation) (HTTP \(statusCode))"
+
         case .badServerResponse(let reason, let jsonPayload):
             return "Invalid server response: \(reason) (Payload: '\(jsonPayload)')"
         case .invalidResponseFormat(let rawPayload):

@@ -69,6 +69,25 @@ public final class ALTAppleAPI: NSObject {
     }
 }
 
+// MARK: - Validation HTTP
+
+extension ALTAppleAPI {
+
+    /// Traduit un code HTTP d'erreur en `ALTServerError`, ou `nil` si la réponse
+    /// est exploitable.
+    ///
+    /// À appeler avant toute tentative de parsing : le corps d'une réponse 503
+    /// est une page HTML, et l'interpréter comme un plist malformé masque à la
+    /// fois la cause et le fait que l'appel mérite d'être réessayé.
+    static func httpFailure(_ response: URLResponse?) -> ALTServerError? {
+        guard let http = response as? HTTPURLResponse else { return nil }
+        // 204 (No Content) est légitime sur certains appels ; il est traité plus loin.
+        guard !(200...299).contains(http.statusCode), http.statusCode != 204 else { return nil }
+        return .httpError(statusCode: http.statusCode,
+                          isTransient: ALTServerError.isTransientStatusCode(http.statusCode))
+    }
+}
+
 // MARK: - Response Processing
 
 extension ALTAppleAPI {
@@ -217,9 +236,14 @@ extension ALTAppleAPI {
             request.setValue($1, forHTTPHeaderField: $0)
         }
 
-        session.dataTask(with: request) { data, _, error in
+        session.dataTask(with: request) { data, response, error in
             if let error {
                 verboseLog("[AltSign] sendRequest failed with error: \(error)")
+            }
+            if let failure = Self.httpFailure(response) {
+                verboseLog("[AltSign] sendRequest \(failure.localizedDescription)")
+                completionHandler(nil, failure)
+                return
             }
             guard let data, !data.isEmpty else {
                 let err = error ?? ALTServerError.badServerResponse(reason: "Server returned empty response (Content-Length: 0) — session may have timed out", jsonPayload: "0 bytes")
@@ -333,7 +357,12 @@ extension ALTAppleAPI {
             if let error {
                 verboseLog("[AltSign] sendServicesRequest failed with error: \(error)")
             }
-            
+            if let failure = Self.httpFailure(response) {
+                verboseLog("[AltSign] sendServicesRequest \(failure.localizedDescription)")
+                completionHandler(nil, failure)
+                return
+            }
+
             let httpResponse = response as? HTTPURLResponse
             let isDelete = methodOverride == "DELETE" || request.httpMethod == "DELETE"
             let isNoContent = httpResponse?.statusCode == 204

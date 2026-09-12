@@ -675,7 +675,12 @@ public extension ALTAppleAPI {
             request.setValue($1, forHTTPHeaderField: $0)
         }
 
-        session.dataTask(with: request) { data, _, error in
+        session.dataTask(with: request) { data, response, error in
+            if let failure = ALTAppleAPI.httpFailure(response) {
+                verboseLog("[AltSign] sendRequest(plist) \(failure.localizedDescription)")
+                completionHandler(nil, failure)
+                return
+            }
             if let error {
                 verboseLog("[AltSign] sendRequest(plist) failed with error: \(error)")
             }
