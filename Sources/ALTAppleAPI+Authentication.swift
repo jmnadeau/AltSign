@@ -290,6 +290,10 @@ private extension ALTAppleAPI {
                                 if let error {
                                     verboseLog("[AltSign] requestTrustedDeviceTwoFactorCode verification failed with error: \(error)")
                                 }
+                                if let failure = ALTAppleAPI.httpFailure(response) {
+                                    verboseLog("[AltSign] requestTrustedDeviceTwoFactorCode \(failure.localizedDescription)")
+                                    throw failure
+                                }
                                 guard let data = data else { throw error ?? ALTAppleAPIError.unknown }
 
                                 guard let responseDictionary = self.parsePlistOrJSON(data) else {
@@ -512,6 +516,10 @@ private extension ALTAppleAPI {
                 {
                     if let error {
                         verboseLog("[AltSign] sendAuthenticationRequest failed with error: \(error)")
+                    }
+                    if let failure = ALTAppleAPI.httpFailure(response) {
+                        verboseLog("[AltSign] sendAuthenticationRequest \(failure.localizedDescription)")
+                        throw failure
                     }
                     guard let data = data, !data.isEmpty else {
                         let err = error ?? ALTServerError.badServerResponse(reason: "Server returned empty response (Content-Length: 0) — session may have timed out", jsonPayload: "0 bytes")
