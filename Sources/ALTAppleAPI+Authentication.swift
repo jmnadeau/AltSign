@@ -352,7 +352,36 @@ private extension ALTAppleAPI {
                                  xcodeVersion: String,
                                  verificationHandler: @escaping (@escaping (String?) -> Void) -> Void,
                                  completionHandler: @escaping (Result<Void, Error>) -> Void) {
-        verboseLog("[AltSign] requestSMSTwoFactorCode starting for dsid: \(dsid)")
+        // L'identifiant du numéro était codé en dur à « 1 ». On le demande à
+        // Apple, en se rabattant sur « 1 » si la réponse est inexploitable —
+        // ainsi on n'est jamais pire qu'avant.
+        fetchTrustedPhoneNumbers(dsid: dsid, idmsToken: idmsToken,
+                                 anisetteData: anisetteData, xcodeVersion: xcodeVersion) { numbers in
+            if numbers.count > 1 {
+                verboseLog("[AltSign] \(numbers.count) trusted numbers; using the first. "
+                    + "Selection is not implemented yet.")
+            }
+            let phoneNumberID = numbers.first?.id ?? "1"
+            if numbers.first == nil {
+                verboseLog("[AltSign] No trusted number obtained; falling back to id 1.")
+            }
+            self.requestSMSTwoFactorCode(dsid: dsid, idmsToken: idmsToken,
+                                         anisetteData: anisetteData, xcodeVersion: xcodeVersion,
+                                         phoneNumberID: phoneNumberID,
+                                         verificationHandler: verificationHandler,
+                                         completionHandler: completionHandler)
+        }
+    }
+
+    private func requestSMSTwoFactorCode(dsid: String,
+                                         idmsToken: String,
+                                         anisetteData: ALTAnisetteData,
+                                         xcodeVersion: String,
+                                         phoneNumberID: String,
+                                         verificationHandler: @escaping (@escaping (String?) -> Void) -> Void,
+                                         completionHandler: @escaping (Result<Void, Error>) -> Void) {
+        verboseLog("[AltSign] requestSMSTwoFactorCode starting for dsid: \(dsid), "
+            + "phoneNumber.id: \(phoneNumberID)")
         let requestURL = URL(string: "https://gsa.apple.com/auth/verify/phone/put?mode=sms")!
         let verifyURL = URL(string: "https://gsa.apple.com/auth/verify/phone/securitycode?referrer=/auth/verify/phone/put")!
 
@@ -362,7 +391,7 @@ private extension ALTAppleAPI {
         do {
             let bodyXML = [
                 "serverInfo": [
-                    "phoneNumber.id": "1"
+                    "phoneNumber.id": phoneNumberID
                 ]
             ] as [String: Any]
 
@@ -407,7 +436,7 @@ private extension ALTAppleAPI {
                             "securityCode.code": verificationCode,
                             "serverInfo": [
                                 "mode": "sms",
-                                "phoneNumber.id": "1"
+                                "phoneNumber.id": phoneNumberID
                             ]
                         ] as [String: Any]
 
@@ -752,4 +781,97 @@ public extension ALTAppleAPI {
 }
 
 private extension ALTAppleAPI {
+}
+
+
+// MARK: - Numéros de confiance
+
+public struct ALTTrustedPhoneNumber {
+    /// Identifiant attendu par `phoneNumber.id`. Rien ne garantit qu'il vaut 1.
+    public let id: String
+    /// Forme masquée telle qu'Apple la renvoie, pour l'afficher à l'utilisateur.
+    public let obfuscated: String?
+}
+
+public extension ALTAppleAPI {
+
+    /// Demande à Apple les numéros de confiance du compte.
+    ///
+    /// Existe parce que `phoneNumber.id` était codé en dur à « 1 » : si le
+    /// numéro du compte porte un autre identifiant, Apple refuse d'envoyer le
+    /// code avec un 403 laconique (« Could not connect to iCloud »), et la 2FA
+    /// par SMS est tout simplement impossible.
+    ///
+    /// La forme exacte de la réponse n'est pas documentée. Le parsing est donc
+    /// défensif et tolère JSON comme plist ; le corps brut est journalisé pour
+    /// qu'un échec d'interprétation soit diagnosticable au lieu d'être muet.
+    /// L'appelant doit pouvoir se rabattre sur l'ancien comportement.
+    func fetchTrustedPhoneNumbers(dsid: String,
+                                  idmsToken: String,
+                                  anisetteData: ALTAnisetteData,
+                                  xcodeVersion: String,
+                                  completionHandler: @escaping ([ALTTrustedPhoneNumber]) -> Void) {
+        let url = URL(string: "https://gsa.apple.com/auth")!
+        var request = makeTwoFactorCodeRequest(url: url, dsid: dsid, idmsToken: idmsToken,
+                                               anisetteData: anisetteData, xcodeVersion: xcodeVersion)
+        request.httpMethod = "GET"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        session.dataTask(with: request) { data, response, error in
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            let raw = data.flatMap { String(data: $0, encoding: .utf8) } ?? "nil"
+            verboseLog("[AltSign] fetchTrustedPhoneNumbers status \(status), body: \(raw)")
+            if let error {
+                verboseLog("[AltSign] fetchTrustedPhoneNumbers failed: \(error)")
+            }
+
+            guard let data, (200...299).contains(status) else {
+                completionHandler([])
+                return
+            }
+            let numbers = ALTAppleAPI.parseTrustedPhoneNumbers(data)
+            verboseLog("[AltSign] fetchTrustedPhoneNumbers parsed \(numbers.count): "
+                + numbers.map { "id=\($0.id) \($0.obfuscated ?? "")" }.joined(separator: ", "))
+            completionHandler(numbers)
+        }.resume()
+    }
+
+    /// Extrait les numéros d'une réponse JSON ou plist.
+    ///
+    /// Séparé du réseau pour être éprouvable sans compte Apple.
+    static func parseTrustedPhoneNumbers(_ data: Data) -> [ALTTrustedPhoneNumber] {
+        let parsed: Any? = (try? JSONSerialization.jsonObject(with: data))
+            ?? (try? PropertyListSerialization.propertyList(from: data, options: [], format: nil))
+        guard let root = parsed else { return [] }
+
+        // Les clés diffèrent selon l'endpoint ; on cherche la première liste
+        // plausible où qu'elle se trouve.
+        func numbers(in any: Any) -> [[String: Any]]? {
+            guard let dict = any as? [String: Any] else { return nil }
+            for key in ["trustedPhoneNumbers", "phoneNumbers", "trustedPhoneNumber"] {
+                if let list = dict[key] as? [[String: Any]] { return list }
+                if let single = dict[key] as? [String: Any] { return [single] }
+            }
+            // Un niveau d'imbrication, p.ex. sous "direct" ou "authType".
+            for value in dict.values {
+                if let found = numbers(in: value) { return found }
+            }
+            return nil
+        }
+
+        guard let list = numbers(in: root) else { return [] }
+        return list.compactMap { entry in
+            // L'identifiant peut arriver en nombre comme en chaîne.
+            let id: String?
+            if let n = entry["id"] as? NSNumber { id = n.stringValue }
+            else if let s = entry["id"] as? String { id = s }
+            else { id = nil }
+            guard let id else { return nil }
+
+            let obfuscated = (entry["numberWithDialCode"] as? String)
+                ?? (entry["obfuscatedNumber"] as? String)
+                ?? (entry["lastTwoDigits"] as? String).map { "••\($0)" }
+            return ALTTrustedPhoneNumber(id: id, obfuscated: obfuscated)
+        }
+    }
 }
