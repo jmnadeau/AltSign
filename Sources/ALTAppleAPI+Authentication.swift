@@ -452,58 +452,6 @@ private extension ALTAppleAPI {
         requestCodeTask.resume()
     }
 
-    // Membre d'une `private extension` : le `public` était sans effet (Swift le
-    // gardait privé et le signalait). On le retire plutôt que d'ouvrir
-    // l'extension, pour ne pas élargir la surface publique de la lib.
-    func fetchAccount(
-        session: ALTAppleAPISession,
-        completionHandler: @escaping (Result<ALTAccount, Error>) -> Void
-    ) {
-        verboseLog("[AltSign] fetchAccount starting for dsid: \(session.dsid)")
-        let url = URL(string: "viewDeveloper.action", relativeTo: self.baseURL)!
-
-        self.sendRequest(url: url,
-                         additionalParameters: nil,
-                         session: session,
-                         team: nil) { responseDictionary, requestError in
-            do {
-                if let requestError {
-                    verboseLog("[AltSign] fetchAccount request failed: \(requestError)")
-                }
-
-                guard let responseDictionary = responseDictionary else {
-                    if let requestError { throw requestError }
-                    throw ALTAppleAPIError.unknown
-                }
-
-                var processError: Error?
-
-                guard let account = self.processResponse(
-                    responseDictionary,
-                    parseHandler: {
-                        guard let dictionary =
-                            responseDictionary["developer"] as? [String: Any]
-                        else { return nil }
-                        return ALTAccount(responseDictionary: dictionary)
-                    },
-                    resultCodeHandler: nil,
-                    error: &processError
-                ) as? ALTAccount else {
-                    verboseLog("[AltSign] fetchAccount parsing response failed: \(processError ?? ALTAppleAPIError.unknown)")
-                    throw processError ?? ALTAppleAPIError.unknown
-                }
-
-                verboseLog("[AltSign] fetchAccount succeeded: \(account.name) (Apple ID: \(account.appleID))")
-                completionHandler(.success(account))
-
-            } catch {
-                completionHandler(.failure(error))
-            }
-        }
-    }
-}
-
-private extension ALTAppleAPI {
     func sendAuthenticationRequest(parameters requestParameters: [String: Any], anisetteData: ALTAnisetteData, completionHandler: @escaping (Result<[String: Any], Error>) -> Void) {
         do {
             let requestURL = URL(string: "https://gsa.apple.com/grandslam/GsService2")!
@@ -740,4 +688,68 @@ private extension Data {
 
         return CoreCryptoBridge.aesGCMDecrypt(key: sessionKey, nonce: nonce, aad: aad, ciphertext: ciphertext, tag: tag)
     }
+}
+
+// MARK: - Restauration de session
+
+public extension ALTAppleAPI {
+
+    /// Récupère le compte à partir d'une session existante.
+    ///
+    /// Rendu public pour permettre la réutilisation d'une session : un
+    /// consommateur qui a conservé un `dsid` et un `authToken` peut reconstruire
+    /// un `ALTAppleAPISession` avec des données anisette fraîches, puis appeler
+    /// ceci — à la fois pour vérifier que la session tient encore et pour
+    /// obtenir l'`ALTAccount` que réclament les autres appels. Sans cela, la
+    /// seule façon d'obtenir un compte est de se réauthentifier, ce qui impose
+    /// une double authentification à chaque cycle.
+    func fetchAccount(
+        session: ALTAppleAPISession,
+        completionHandler: @escaping (Result<ALTAccount, Error>) -> Void
+    ) {
+        verboseLog("[AltSign] fetchAccount starting for dsid: \(session.dsid)")
+        let url = URL(string: "viewDeveloper.action", relativeTo: self.baseURL)!
+
+        self.sendRequest(url: url,
+                         additionalParameters: nil,
+                         session: session,
+                         team: nil) { responseDictionary, requestError in
+            do {
+                if let requestError {
+                    verboseLog("[AltSign] fetchAccount request failed: \(requestError)")
+                }
+
+                guard let responseDictionary = responseDictionary else {
+                    if let requestError { throw requestError }
+                    throw ALTAppleAPIError.unknown
+                }
+
+                var processError: Error?
+
+                guard let account = self.processResponse(
+                    responseDictionary,
+                    parseHandler: {
+                        guard let dictionary =
+                            responseDictionary["developer"] as? [String: Any]
+                        else { return nil }
+                        return ALTAccount(responseDictionary: dictionary)
+                    },
+                    resultCodeHandler: nil,
+                    error: &processError
+                ) as? ALTAccount else {
+                    verboseLog("[AltSign] fetchAccount parsing response failed: \(processError ?? ALTAppleAPIError.unknown)")
+                    throw processError ?? ALTAppleAPIError.unknown
+                }
+
+                verboseLog("[AltSign] fetchAccount succeeded: \(account.name) (Apple ID: \(account.appleID))")
+                completionHandler(.success(account))
+
+            } catch {
+                completionHandler(.failure(error))
+            }
+        }
+    }
+}
+
+private extension ALTAppleAPI {
 }
