@@ -373,6 +373,20 @@ private extension ALTAppleAPI {
         }
     }
 
+    /// Demande l'envoi du code par SMS, puis le vérifie.
+    ///
+    /// Réécrit d'après l'implémentation de référence de SideStore
+    /// (apple-private-apis, icloud-auth/src/client.rs). L'ancienne version
+    /// différait sur quatre points, chacun suffisant à faire échouer l'appel :
+    ///
+    ///   - méthode `POST` au lieu de `PUT` ;
+    ///   - URL `/auth/verify/phone/put?mode=sms` au lieu de `/auth/verify/phone/` ;
+    ///   - corps en property list, là où Apple attend du JSON ;
+    ///   - en-têtes `X-Apple-App-Info` et `X-Xcode-Version` en trop, en-tête
+    ///     `Loc` manquant.
+    ///
+    /// Apple répondait un 403 « Could not connect to iCloud », qui ne désigne
+    /// rien, et l'utilisateur se voyait réclamer un code jamais envoyé.
     private func requestSMSTwoFactorCode(dsid: String,
                                          idmsToken: String,
                                          anisetteData: ALTAnisetteData,
@@ -382,103 +396,125 @@ private extension ALTAppleAPI {
                                          completionHandler: @escaping (Result<Void, Error>) -> Void) {
         verboseLog("[AltSign] requestSMSTwoFactorCode starting for dsid: \(dsid), "
             + "phoneNumber.id: \(phoneNumberID)")
-        let requestURL = URL(string: "https://gsa.apple.com/auth/verify/phone/put?mode=sms")!
-        let verifyURL = URL(string: "https://gsa.apple.com/auth/verify/phone/securitycode?referrer=/auth/verify/phone/put")!
 
-        var request = makeTwoFactorCodeRequest(url: requestURL, dsid: dsid, idmsToken: idmsToken, anisetteData: anisetteData, xcodeVersion: xcodeVersion)
-        request.httpMethod = "POST"
+        let numberID = Int(phoneNumberID) ?? 1
+        var request = makeSMSRequest(
+            url: URL(string: "https://gsa.apple.com/auth/verify/phone/")!,
+            dsid: dsid, idmsToken: idmsToken, anisetteData: anisetteData)
+        request.httpMethod = "PUT"
 
         do {
-            let bodyXML = [
-                "serverInfo": [
-                    "phoneNumber.id": phoneNumberID
-                ]
-            ] as [String: Any]
-
-            let bodyData = try PropertyListSerialization.data(fromPropertyList: bodyXML, format: .xml, options: 0)
-            request.httpBody = bodyData
+            request.httpBody = try JSONSerialization.data(withJSONObject: [
+                "phoneNumber": ["id": numberID],
+                "mode": "sms",
+            ])
         } catch {
-            verboseLog("[AltSign] requestSMSTwoFactorCode serialization failed: \(error)")
             completionHandler(.failure(error))
             return
         }
 
-        let requestCodeTask = session.dataTask(with: request) { data, response, error in
-            let httpResponse = response as? HTTPURLResponse
-            let statusCode = httpResponse?.statusCode ?? 0
-            let responseStr = data != nil ? self.formatPayloadJSON(data!) : "nil"
+        session.dataTask(with: request) { data, response, error in
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            verboseLog("[AltSign] requestSMSTwoFactorCode request code status: \(status), "
+                + "response: \(data.flatMap { String(data: $0, encoding: .utf8) } ?? "nil")")
+
             if let error {
-                verboseLog("[AltSign] requestSMSTwoFactorCode request code task failed: \(error) (status: \(statusCode))")
-            } else {
-                verboseLog("[AltSign] requestSMSTwoFactorCode request code task succeeded (status: \(statusCode), response: \(responseStr))")
-            }
-            do {
-                guard error == nil else { throw error! }
-                // Only the transport error was checked here, never the status.
-                // A refusal (Apple answers 403 with an <xmlui> alert when it
-                // will not send a code) was logged as a success, and the user
-                // was then prompted for a code that would never arrive.
-                if !(200...299).contains(statusCode) {
-                    throw ALTServerError.twoFactorCodeRequestRejected(
-                        statusCode: statusCode,
-                        appleMessage: ALTAppleAPI.alertMessage(in: data))
-                }
-
-                func responseHandler(verificationCode: String?) {
-                    verboseLog("[AltSign] requestSMSTwoFactorCode received code from user. Has code: \(verificationCode != nil)")
-                    do {
-                        guard let verificationCode = verificationCode else { throw ALTAppleAPIError.requiresTwoFactorAuthentication }
-
-                        var request = self.makeTwoFactorCodeRequest(url: verifyURL, dsid: dsid, idmsToken: idmsToken, anisetteData: anisetteData, xcodeVersion: xcodeVersion)
-                        request.httpMethod = "POST"
-
-                        let bodyXML = [
-                            "securityCode.code": verificationCode,
-                            "serverInfo": [
-                                "mode": "sms",
-                                "phoneNumber.id": phoneNumberID
-                            ]
-                        ] as [String: Any]
-
-                        let bodyData = try PropertyListSerialization.data(fromPropertyList: bodyXML, format: .xml, options: 0)
-                        request.httpBody = bodyData
-
-                        verboseLog("[AltSign] requestSMSTwoFactorCode verifying code...")
-                        let verifyCodeTask = self.session.dataTask(with: request) { _, response, error in
-                            do {
-                                if let error {
-                                    verboseLog("[AltSign] requestSMSTwoFactorCode verification failed: \(error)")
-                                }
-                                guard error == nil else { throw error! }
-
-                                guard let httpResponse = response as? HTTPURLResponse,
-                                      httpResponse.statusCode == 200,
-                                      httpResponse.allHeaderFields.keys.contains("X-Apple-PE-Token") // PE token is included in headers if we sent correct verification code.
-                                else {
-                                    verboseLog("[AltSign] requestSMSTwoFactorCode verification failed (invalid status code or missing PE token)")
-                                    throw ALTAppleAPIError.incorrectVerificationCode
-                                }
-
-                                verboseLog("[AltSign] requestSMSTwoFactorCode code verified successfully!")
-                                completionHandler(.success(()))
-                            } catch {
-                                completionHandler(.failure(error))
-                            }
-                        }
-
-                        verifyCodeTask.resume()
-                    } catch {
-                        completionHandler(.failure(error))
-                    }
-                }
-
-                verificationHandler(responseHandler)
-            } catch {
                 completionHandler(.failure(error))
+                return
             }
+            guard (200...299).contains(status) else {
+                completionHandler(.failure(ALTServerError.twoFactorCodeRequestRejected(
+                    statusCode: status, appleMessage: ALTAppleAPI.alertMessage(in: data))))
+                return
+            }
+
+            verificationHandler { verificationCode in
+                verboseLog("[AltSign] requestSMSTwoFactorCode received code from user. "
+                    + "Has code: \(verificationCode != nil)")
+                guard let verificationCode else {
+                    completionHandler(.failure(ALTAppleAPIError.requiresTwoFactorAuthentication))
+                    return
+                }
+                self.verifySMSTwoFactorCode(verificationCode,
+                                            phoneNumberID: numberID,
+                                            dsid: dsid, idmsToken: idmsToken,
+                                            anisetteData: anisetteData,
+                                            completionHandler: completionHandler)
+            }
+        }.resume()
+    }
+
+    private func verifySMSTwoFactorCode(_ code: String,
+                                        phoneNumberID: Int,
+                                        dsid: String,
+                                        idmsToken: String,
+                                        anisetteData: ALTAnisetteData,
+                                        completionHandler: @escaping (Result<Void, Error>) -> Void) {
+        var request = makeSMSRequest(
+            url: URL(string: "https://gsa.apple.com/auth/verify/phone/securitycode")!,
+            dsid: dsid, idmsToken: idmsToken, anisetteData: anisetteData)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "accept")
+
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: [
+                "phoneNumber": ["id": phoneNumberID],
+                "mode": "sms",
+                "securityCode": ["code": code],
+            ])
+        } catch {
+            completionHandler(.failure(error))
+            return
         }
 
-        requestCodeTask.resume()
+        session.dataTask(with: request) { data, response, error in
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            verboseLog("[AltSign] verifySMSTwoFactorCode status: \(status), "
+                + "response: \(data.flatMap { String(data: $0, encoding: .utf8) } ?? "nil")")
+
+            if let error {
+                completionHandler(.failure(error))
+            } else if status == 200 {
+                completionHandler(.success(()))
+            } else {
+                completionHandler(.failure(ALTServerError.twoFactorCodeRequestRejected(
+                    statusCode: status, appleMessage: ALTAppleAPI.alertMessage(in: data))))
+            }
+        }.resume()
+    }
+
+    /// En-têtes du parcours SMS.
+    ///
+    /// Distincts de `makeTwoFactorCodeRequest`, qui sert au parcours « appareil
+    /// de confiance » et fonctionne : on n'y touche pas. Ici, pas de
+    /// `Content-Type`/`Accept` en property list — le corps est du JSON —, pas
+    /// de `X-Apple-App-Info` ni de `X-Xcode-Version`, et un en-tête `Loc` que
+    /// l'implémentation de référence envoie.
+    private func makeSMSRequest(url: URL,
+                                dsid: String,
+                                idmsToken: String,
+                                anisetteData: ALTAnisetteData) -> URLRequest {
+        let identityToken = Data("\(dsid):\(idmsToken)".utf8).base64EncodedString()
+        let locale = anisetteData.locale.sanitizedIdentifier
+
+        var request = URLRequest(url: url)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("en-us", forHTTPHeaderField: "Accept-Language")
+        request.setValue("Xcode", forHTTPHeaderField: "User-Agent")
+        request.setValue(identityToken, forHTTPHeaderField: "X-Apple-Identity-Token")
+        request.setValue(anisetteData.machineID, forHTTPHeaderField: "X-Apple-I-MD-M")
+        request.setValue(anisetteData.oneTimePassword, forHTTPHeaderField: "X-Apple-I-MD")
+        request.setValue(anisetteData.localUserID, forHTTPHeaderField: "X-Apple-I-MD-LU")
+        request.setValue("\(anisetteData.routingInfo)", forHTTPHeaderField: "X-Apple-I-MD-RINFO")
+        request.setValue(anisetteData.deviceUniqueIdentifier, forHTTPHeaderField: "X-Mme-Device-Id")
+        request.setValue(anisetteData.deviceDescription, forHTTPHeaderField: "X-MMe-Client-Info")
+        request.setValue(dateFormatter.string(from: anisetteData.date),
+                         forHTTPHeaderField: "X-Apple-I-Client-Time")
+        request.setValue(locale, forHTTPHeaderField: "X-Apple-Locale")
+        request.setValue(anisetteData.timeZone.abbreviation() ?? "PST",
+                         forHTTPHeaderField: "X-Apple-I-TimeZone")
+        request.setValue(locale, forHTTPHeaderField: "Loc")
+        return request
     }
 
     func sendAuthenticationRequest(parameters requestParameters: [String: Any], anisetteData: ALTAnisetteData, completionHandler: @escaping (Result<[String: Any], Error>) -> Void) {
@@ -806,14 +842,18 @@ public extension ALTAppleAPI {
     /// défensif et tolère JSON comme plist ; le corps brut est journalisé pour
     /// qu'un échec d'interprétation soit diagnosticable au lieu d'être muet.
     /// L'appelant doit pouvoir se rabattre sur l'ancien comportement.
+    /// `xcodeVersion` est conservé dans la signature par compatibilité mais
+    /// n'est plus envoyé : `X-Xcode-Version` fait partie des en-têtes qu'il
+    /// fallait retirer de ce parcours.
     func fetchTrustedPhoneNumbers(dsid: String,
                                   idmsToken: String,
                                   anisetteData: ALTAnisetteData,
-                                  xcodeVersion: String,
+                                  xcodeVersion: String = "",
                                   completionHandler: @escaping ([ALTTrustedPhoneNumber]) -> Void) {
-        let url = URL(string: "https://gsa.apple.com/auth")!
-        var request = makeTwoFactorCodeRequest(url: url, dsid: dsid, idmsToken: idmsToken,
-                                               anisetteData: anisetteData, xcodeVersion: xcodeVersion)
+        // Les en-têtes du parcours SMS, pas ceux du parcours « appareil de
+        // confiance » : avec ces derniers, Apple répond 401 et corps vide.
+        var request = makeSMSRequest(url: URL(string: "https://gsa.apple.com/auth")!,
+                                     dsid: dsid, idmsToken: idmsToken, anisetteData: anisetteData)
         request.httpMethod = "GET"
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
@@ -825,6 +865,7 @@ public extension ALTAppleAPI {
                 verboseLog("[AltSign] fetchTrustedPhoneNumbers failed: \(error)")
             }
 
+            // 201 signale « SMS requis » et porte la liste : c'est un succès.
             guard let data, (200...299).contains(status) else {
                 completionHandler([])
                 return
