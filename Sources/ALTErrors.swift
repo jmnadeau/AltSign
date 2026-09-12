@@ -296,6 +296,8 @@ public enum ALTServerError: LocalizedError {
     /// d'erreur — illisible, et impossible à distinguer par programme d'une
     /// réponse réellement malformée, donc impossible à réessayer.
     case httpError(statusCode: Int, isTransient: Bool)
+    /// Apple a refusé d'émettre le code de double authentification.
+    case twoFactorCodeRequestRejected(statusCode: Int, appleMessage: String?)
 
     /// Vrai pour les codes qui ont une chance d'aboutir au prochain essai :
     /// erreurs serveur et limitation de débit.
@@ -305,6 +307,13 @@ public enum ALTServerError: LocalizedError {
 
     public var errorDescription: String? {
         switch self {
+        case .twoFactorCodeRequestRejected(let statusCode, let appleMessage):
+            let detail = appleMessage.map { " : \($0)" } ?? ""
+            return "Apple a refusé d'envoyer le code de double authentification "
+                 + "(HTTP \(statusCode))\(detail). Le compte n'a probablement aucun "
+                 + "appareil de confiance ni numéro vérifié : connecte-toi à cet "
+                 + "Apple ID sur un Mac ou un iPhone, puis réessaie."
+
         case .httpError(let statusCode, let isTransient):
             let explanation: String
             switch statusCode {

@@ -71,7 +71,7 @@ public final class ALTAppleAPI: NSObject {
 
 // MARK: - Validation HTTP
 
-extension ALTAppleAPI {
+public extension ALTAppleAPI {
 
     /// Traduit un code HTTP d'erreur en `ALTServerError`, ou `nil` si la réponse
     /// est exploitable.
@@ -79,7 +79,18 @@ extension ALTAppleAPI {
     /// À appeler avant toute tentative de parsing : le corps d'une réponse 503
     /// est une page HTML, et l'interpréter comme un plist malformé masque à la
     /// fois la cause et le fait que l'appel mérite d'être réessayé.
-    static func httpFailure(_ response: URLResponse?) -> ALTServerError? {
+    /// Extrait le message d'une réponse `<xmlui><alert message="…"/></xmlui>`,
+    /// la forme qu'Apple emploie pour ses refus d'authentification.
+    public static func alertMessage(in data: Data?) -> String? {
+        guard let data, let text = String(data: data, encoding: .utf8),
+              let range = text.range(of: "message=\"") else { return nil }
+        let rest = text[range.upperBound...]
+        guard let end = rest.firstIndex(of: "\"") else { return nil }
+        let message = String(rest[..<end])
+        return message.isEmpty ? nil : message
+    }
+
+    public static func httpFailure(_ response: URLResponse?) -> ALTServerError? {
         guard let http = response as? HTTPURLResponse else { return nil }
         // 204 (No Content) est légitime sur certains appels ; il est traité plus loin.
         guard !(200...299).contains(http.statusCode), http.statusCode != 204 else { return nil }
@@ -90,7 +101,7 @@ extension ALTAppleAPI {
 
 // MARK: - Response Processing
 
-extension ALTAppleAPI {
+public extension ALTAppleAPI {
 
     func processResponse(
         _ responseDictionary: [String: Any],
@@ -158,7 +169,7 @@ extension ALTAppleAPI {
 
 // MARK: - Requests (plist endpoints)
 
-extension ALTAppleAPI {
+public extension ALTAppleAPI {
 
     func sendRequest(
         url requestURL: URL,
@@ -272,7 +283,7 @@ extension ALTAppleAPI {
 
 // MARK: - Services Requests (JSON endpoints)
 
-extension ALTAppleAPI {
+public extension ALTAppleAPI {
 
     func sendServicesRequest(
         _ originalRequest: URLRequest,

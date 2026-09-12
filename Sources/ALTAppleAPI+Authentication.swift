@@ -274,6 +274,15 @@ private extension ALTAppleAPI {
             }
             do {
                 guard error == nil else { throw error! }
+                // Only the transport error was checked here, never the status.
+                // A refusal (Apple answers 403 with an <xmlui> alert when it
+                // will not send a code) was logged as a success, and the user
+                // was then prompted for a code that would never arrive.
+                if !(200...299).contains(statusCode) {
+                    throw ALTServerError.twoFactorCodeRequestRejected(
+                        statusCode: statusCode,
+                        appleMessage: ALTAppleAPI.alertMessage(in: data))
+                }
 
                 func responseHandler(verificationCode: String?) {
                     verboseLog("[AltSign] requestTrustedDeviceTwoFactorCode received code from user. Has code: \(verificationCode != nil)")
@@ -376,6 +385,15 @@ private extension ALTAppleAPI {
             }
             do {
                 guard error == nil else { throw error! }
+                // Only the transport error was checked here, never the status.
+                // A refusal (Apple answers 403 with an <xmlui> alert when it
+                // will not send a code) was logged as a success, and the user
+                // was then prompted for a code that would never arrive.
+                if !(200...299).contains(statusCode) {
+                    throw ALTServerError.twoFactorCodeRequestRejected(
+                        statusCode: statusCode,
+                        appleMessage: ALTAppleAPI.alertMessage(in: data))
+                }
 
                 func responseHandler(verificationCode: String?) {
                     verboseLog("[AltSign] requestSMSTwoFactorCode received code from user. Has code: \(verificationCode != nil)")
